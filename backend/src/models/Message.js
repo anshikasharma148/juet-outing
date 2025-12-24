@@ -26,3 +26,4 @@ messageSchema.index({ groupId: 1, timestamp: -1 });
 
 module.exports = mongoose.model('Message', messageSchema);
 
+

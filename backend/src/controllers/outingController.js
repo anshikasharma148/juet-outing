@@ -134,6 +134,12 @@ exports.getOutingRequests = async (req, res) => {
       query.status = { $in: ['pending', 'matched'] };
     }
 
+    // Only show today's or future requests (not expired)
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    query.date = { $gte: today };
+    query.expiresAt = { $gt: now };
+
     if (date) {
       const dateObj = new Date(date);
       dateObj.setHours(0, 0, 0, 0);
@@ -171,21 +177,39 @@ exports.getOutingRequests = async (req, res) => {
   }
 };
 
-// @desc    Get user's own outing requests
+// @desc    Get user's own outing requests (only active ones where user is creator or member)
 // @route   GET /api/outings/my-requests
 // @access  Private
 exports.getMyRequests = async (req, res) => {
   try {
+    // Get requests where user is creator OR member, and status is not cancelled
     const requests = await OutingRequest.find({
-      userId: req.user.id
+      $or: [
+        { userId: req.user.id },
+        { members: req.user.id }
+      ],
+      status: { $ne: 'cancelled' }
     })
     .populate('members', 'name year semester')
     .sort({ createdAt: -1 });
 
+    // Filter to only include requests where user is actually still a member
+    const filteredRequests = requests.filter(request => {
+      // If user is creator, always include
+      if (request.userId.toString() === req.user.id.toString()) {
+        return true;
+      }
+      // If user is member, check they're still in members array
+      return request.members.some(m => {
+        const memberId = m._id?.toString() || m.toString();
+        return memberId === req.user.id.toString();
+      });
+    });
+
     res.status(200).json({
       success: true,
-      count: requests.length,
-      requests
+      count: filteredRequests.length,
+      requests: filteredRequests
     });
   } catch (error) {
     res.status(500).json({
@@ -223,12 +247,13 @@ exports.getOutingRequest = async (req, res) => {
   }
 };
 
-// @desc    Cancel outing request
+// @desc    Cancel outing request (creator or member can cancel)
 // @route   PUT /api/outings/:id/cancel
 // @access  Private
 exports.cancelOutingRequest = async (req, res) => {
   try {
-    const request = await OutingRequest.findById(req.params.id);
+    const request = await OutingRequest.findById(req.params.id)
+      .populate('members', 'name');
 
     if (!request) {
       return res.status(404).json({
@@ -237,41 +262,121 @@ exports.cancelOutingRequest = async (req, res) => {
       });
     }
 
-    if (request.userId.toString() !== req.user.id.toString()) {
+    // Check if user is creator or member
+    const isCreator = request.userId.toString() === req.user.id.toString();
+    const isMember = request.members.some(m => 
+      m._id?.toString() === req.user.id.toString() || 
+      m.toString() === req.user.id.toString()
+    );
+
+    if (!isCreator && !isMember) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to cancel this request'
       });
     }
 
-    request.status = 'cancelled';
+    // Remove user from members if they're a member (not creator)
+    if (!isCreator && isMember) {
+      request.members = request.members.filter(m => {
+        const memberId = m._id?.toString() || m.toString();
+        return memberId !== req.user.id.toString();
+      });
+      
+      // If less than 3 members remain, update status
+      if (request.members.length < 3 && request.status === 'ready') {
+        request.status = request.members.length >= 2 ? 'matched' : 'pending';
+      }
+    } else {
+      // Creator cancelled - cancel entire request
+      request.status = 'cancelled';
+    }
+    
     await request.save();
 
-    // If group exists, cancel it too
-    const group = await Group.findOne({ requestId: request._id });
-    if (group && group.status === 'active') {
-      group.status = 'cancelled';
-      await group.save();
+    // Emit socket event (always, even if no group exists yet)
+    const io = req.app.get('io');
+    io.to(`group-${request._id}`).emit('member-left', {
+      requestId: request._id,
+      leftBy: req.user.name,
+      leftById: req.user.id,
+      isCreator: isCreator,
+      remainingMembers: request.members.length,
+      status: request.status
+    });
 
-      // Notify other members
-      const otherMembers = group.members.filter(
-        m => m.toString() !== req.user.id.toString()
-      );
-      for (const memberId of otherMembers) {
-        const member = await User.findById(memberId);
-        if (member && member.pushToken) {
-          await sendPushNotification(
-            member.pushToken,
-            'Outing Cancelled',
-            `${req.user.name} cancelled the outing`
-          );
+    // If creator cancelled, emit cancellation event
+    if (isCreator) {
+      io.to(`group-${request._id}`).emit('request-cancelled', {
+        requestId: request._id,
+        cancelledBy: req.user.name,
+        isCreator: true
+      });
+    }
+
+    // If group exists, update or cancel it
+    const group = await Group.findOne({ requestId: request._id });
+    if (group) {
+      if (request.status === 'cancelled') {
+        group.status = 'cancelled';
+        await group.save();
+      } else if (!isCreator && isMember) {
+        // Remove user from group members
+        group.members = group.members.filter(m => m.toString() !== req.user.id.toString());
+        // Update group members to match request
+        group.members = request.members;
+        if (group.members.length < 3) {
+          group.status = 'cancelled';
         }
+        await group.save();
+      }
+    }
+
+    // Notify ALL remaining members (including creator if not the one who left/cancelled)
+    const membersToNotify = request.members.filter(m => {
+      const memberId = m._id?.toString() || m.toString();
+      return memberId !== req.user.id.toString();
+    });
+
+    // Also notify creator if they didn't cancel
+    if (!isCreator) {
+      const creator = await User.findById(request.userId);
+      if (creator && creator.pushToken) {
+        const message = `${req.user.name} left the outing group. ${request.members.length} member${request.members.length !== 1 ? 's' : ''} remaining.`;
+        await sendPushNotification(
+          creator.pushToken,
+          'Member Left Outing',
+          message
+        );
+      }
+    }
+    
+    // Notify other members
+    for (const member of membersToNotify) {
+      const memberId = member._id?.toString() || member.toString();
+      const memberUser = await User.findById(memberId);
+      if (memberUser && memberUser.pushToken) {
+        const notificationTitle = isCreator 
+          ? 'Outing Cancelled'
+          : 'Member Left Outing';
+        const notificationBody = isCreator 
+          ? `${req.user.name} cancelled the outing`
+          : `${req.user.name} left the outing group. ${request.members.length} member${request.members.length !== 1 ? 's' : ''} remaining.`;
+        
+        await sendPushNotification(
+          memberUser.pushToken,
+          notificationTitle,
+          notificationBody
+        );
       }
     }
 
     res.status(200).json({
       success: true,
-      message: 'Outing request cancelled successfully'
+      message: isCreator 
+        ? 'Outing request cancelled successfully'
+        : 'You have left the outing group',
+      request
     });
   } catch (error) {
     res.status(500).json({

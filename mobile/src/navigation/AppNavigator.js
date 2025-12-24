@@ -11,6 +11,8 @@ import ChatScreen from '../screens/ChatScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import OutingHistoryScreen from '../screens/OutingHistoryScreen';
 import ActiveGroupScreen from '../screens/ActiveGroupScreen';
+import EditProfileScreen from '../screens/EditProfileScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -41,6 +43,16 @@ const HomeStack = () => (
       name="OutingHistory" 
       component={OutingHistoryScreen}
       options={{ title: 'Outing History' }}
+    />
+    <Stack.Screen 
+      name="EditProfile" 
+      component={EditProfileScreen}
+      options={{ title: 'Edit Profile' }}
+    />
+    <Stack.Screen 
+      name="Settings" 
+      component={SettingsScreen}
+      options={{ title: 'Settings' }}
     />
   </Stack.Navigator>
 );

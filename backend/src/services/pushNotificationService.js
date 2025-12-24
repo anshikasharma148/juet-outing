@@ -58,3 +58,4 @@ const sendPushNotification = async (pushToken, title, body, data = {}) => {
 
 module.exports = { sendPushNotification, initializeFirebase };
 
+

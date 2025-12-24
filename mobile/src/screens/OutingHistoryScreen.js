@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, FlatList } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, Text } from 'react-native-paper';
 import { userAPI } from '../services/api';
 
@@ -31,27 +32,37 @@ const OutingHistoryScreen = () => {
     });
   };
 
-  const renderItem = ({ item }) => (
-    <Card style={styles.card}>
-      <Card.Content>
-        <Text variant="titleMedium" style={styles.dateText}>
-          {formatDate(item.outingDate)}
-        </Text>
-        <Text variant="bodySmall" style={styles.timeText}>
-          {item.outingTime}
-        </Text>
-        <Text variant="bodySmall" style={styles.membersText}>
-          Members: {item.members?.map((m) => m.name).join(', ')}
-        </Text>
-        <Text variant="bodySmall" style={styles.statusText}>
-          Status: {item.status}
-        </Text>
-      </Card.Content>
-    </Card>
-  );
+  const renderItem = ({ item }) => {
+    const statusText = item.status === 'not_matched' ? 'Not Matched' : 
+                       item.status === 'completed' ? 'Completed' :
+                       item.status === 'cancelled' ? 'Cancelled' : 
+                       item.status;
+    
+    return (
+      <Card style={styles.card}>
+        <Card.Content>
+          <Text variant="titleMedium" style={styles.dateText}>
+            {formatDate(item.outingDate || item.createdAt)}
+          </Text>
+          <Text variant="bodySmall" style={styles.timeText}>
+            {item.outingTime || 'N/A'}
+          </Text>
+          <Text variant="bodySmall" style={styles.membersText}>
+            Members: {item.members?.map((m) => m.name || m).join(', ') || 'N/A'}
+          </Text>
+          <Text variant="bodySmall" style={[
+            styles.statusText,
+            item.status === 'not_matched' && styles.notMatchedText
+          ]}>
+            Status: {statusText}
+          </Text>
+        </Card.Content>
+      </Card>
+    );
+  };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <FlatList
         data={history}
         renderItem={renderItem}
@@ -65,7 +76,7 @@ const OutingHistoryScreen = () => {
           </View>
         }
       />
-    </View>
+    </SafeAreaView>
   );
 };
 
@@ -98,6 +109,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontStyle: 'italic',
   },
+  notMatchedText: {
+    color: '#ff9800',
+    fontWeight: '500',
+  },
   empty: {
     padding: 40,
     alignItems: 'center',
@@ -108,4 +123,5 @@ const styles = StyleSheet.create({
 });
 
 export default OutingHistoryScreen;
+
 

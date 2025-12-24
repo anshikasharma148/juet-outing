@@ -84,12 +84,8 @@ exports.joinRequest = async (req, res) => {
       });
     }
 
-    if (request.members.length >= 3) {
-      return res.status(400).json({
-        success: false,
-        message: 'This request already has 3 members'
-      });
-    }
+    // Allow 3 or more members (minimum 3 required for outing)
+    // No maximum limit - more girls can join
 
     if (request.status === 'cancelled' || request.status === 'completed') {
       return res.status(400).json({
@@ -100,59 +96,105 @@ exports.joinRequest = async (req, res) => {
 
     // Add user to members
     request.members.push(req.user.id);
+    const memberCount = request.members.length;
     
-    // Update status if we have 3 members
-    if (request.members.length === 3) {
-      request.status = 'matched';
+    // Update status based on member count
+    if (memberCount >= 3) {
+      request.status = 'ready';
     } else {
       request.status = 'matched';
     }
 
     await request.save();
 
-    // Notify request creator
-    const creator = await User.findById(request.userId);
-    if (creator && creator.pushToken) {
-      await sendPushNotification(
-        creator.pushToken,
-        'Someone Joined Your Request',
-        `${req.user.name} joined your outing request`
-      );
+    // Get socket.io instance
+    const io = req.app.get('io');
+    
+    // Emit socket event for member joined
+    io.to(`group-${request._id}`).emit('member-joined', {
+      requestId: request._id,
+      joinedBy: req.user.name,
+      joinedById: req.user.id,
+      memberCount: memberCount,
+      members: request.members
+    });
+
+    // Notify ALL members (creator + other members) when someone joins
+    const allMembersToNotify = [...request.members];
+    
+    for (const memberId of allMembersToNotify) {
+      const member = await User.findById(memberId);
+      if (member && member.pushToken) {
+        const isCreator = memberId.toString() === request.userId.toString();
+        const notificationTitle = isCreator 
+          ? 'Someone Joined Your Request'
+          : 'New Member Joined';
+        const notificationBody = isCreator
+          ? `${req.user.name} joined your outing request. You now have ${memberCount} member${memberCount !== 1 ? 's' : ''}.`
+          : `${req.user.name} joined the outing group. You now have ${memberCount} member${memberCount !== 1 ? 's' : ''}.`;
+        
+        await sendPushNotification(
+          member.pushToken,
+          notificationTitle,
+          notificationBody
+        );
+      }
     }
 
-    // If group is complete, create group
-    if (request.members.length === 3) {
-      const group = await Group.create({
+    // If group has 3+ members, create/update group and notify
+    if (memberCount >= 3) {
+      let group = await Group.findOne({ requestId: request._id });
+      
+      if (!group) {
+        // Create new group
+        group = await Group.create({
+          requestId: request._id,
+          members: request.members,
+          outingDate: request.date,
+          outingTime: request.time
+        });
+      } else {
+        // Update existing group with new members
+        group.members = request.members;
+        await group.save();
+      }
+
+      // Emit socket event for group ready (additional to member-joined)
+      io.to(`group-${request._id}`).emit('group-ready', {
         requestId: request._id,
+        groupId: group._id,
         members: request.members,
-        outingDate: request.date,
-        outingTime: request.time
+        message: 'Group is ready for outing!'
       });
 
-      // Notify all members
+      // Notify all members that group is ready (in addition to join notification)
       for (const memberId of request.members) {
         const member = await User.findById(memberId);
         if (member && member.pushToken) {
           await sendPushNotification(
             member.pushToken,
-            'Group Formed!',
-            'Your outing group is ready. You can now coordinate with your group members.'
+            'Ready for Outing! 🎉',
+            `Your group now has ${memberCount} members. You're ready to go out!`
           );
         }
       }
 
       return res.status(200).json({
         success: true,
-        message: 'Group formed successfully!',
+        message: `Group ready! You now have ${memberCount} members.`,
         request,
-        group
+        group,
+        groupReady: true
       });
     }
 
+    // Socket event already emitted above, no need to emit again
+
     res.status(200).json({
       success: true,
-      message: 'Joined request successfully',
-      request
+      message: `Joined successfully. ${3 - memberCount} more member(s) needed.`,
+      request,
+      groupReady: false
     });
   } catch (error) {
     res.status(500).json({
@@ -216,33 +258,33 @@ exports.autoMatch = async (req, res) => {
       });
     }
 
-    if (userRequest.members.length >= 3) {
-      return res.status(400).json({
-        success: false,
-        message: 'Your request already has 3 members'
-      });
-    }
-
+    // Allow 3+ members - no limit
     const matchingRequests = await findMatchingRequests(userRequest, req.user.id);
 
     // Sort by number of members (prioritize requests with fewer members)
     matchingRequests.sort((a, b) => a.members.length - b.members.length);
 
-    // Try to join requests until we have 3 members
+    // Try to join requests (allow 3+ members)
     const joinedRequests = [];
     for (const match of matchingRequests) {
-      if (userRequest.members.length >= 3) break;
-      if (match.members.length >= 3) continue;
+      // Skip if already has many members (optional: can set a limit like 5)
+      if (match.members.length >= 5) continue;
       if (match.members.some(m => m._id.toString() === req.user.id.toString())) continue;
 
       // Join this request
       match.members.push(req.user.id);
       userRequest.members.push(match.userId);
       
-      if (match.members.length === 3) {
+      // Update status based on member count
+      if (match.members.length >= 3) {
+        match.status = 'ready';
+      } else {
         match.status = 'matched';
       }
-      if (userRequest.members.length === 3) {
+      
+      if (userRequest.members.length >= 3) {
+        userRequest.status = 'ready';
+      } else {
         userRequest.status = 'matched';
       }
 
@@ -252,41 +294,58 @@ exports.autoMatch = async (req, res) => {
 
     await userRequest.save();
 
-    // If we have 3 members, create group
-    if (userRequest.members.length === 3) {
-      const allMembers = [...userRequest.members];
-      const group = await Group.create({
+    // If we have 3+ members, create/update group
+    if (userRequest.members.length >= 3) {
+      let group = await Group.findOne({ requestId: userRequest._id });
+      
+      if (!group) {
+        group = await Group.create({
+          requestId: userRequest._id,
+          members: userRequest.members,
+          outingDate: userRequest.date,
+          outingTime: userRequest.time
+        });
+      } else {
+        group.members = userRequest.members;
+        await group.save();
+      }
+
+      // Emit socket event
+      const io = req.app.get('io');
+      io.to(`group-${userRequest._id}`).emit('group-ready', {
         requestId: userRequest._id,
-        members: allMembers,
-        outingDate: userRequest.date,
-        outingTime: userRequest.time
+        groupId: group._id,
+        members: userRequest.members,
+        message: 'Group is ready for outing!'
       });
 
       // Notify all members
-      for (const memberId of allMembers) {
+      for (const memberId of userRequest.members) {
         const member = await User.findById(memberId);
         if (member && member.pushToken) {
           await sendPushNotification(
             member.pushToken,
-            'Group Formed!',
-            'Your outing group is ready. You can now coordinate with your group members.'
+            'Ready for Outing! 🎉',
+            `Your group now has ${userRequest.members.length} members. You're ready to go out!`
           );
         }
       }
 
       return res.status(200).json({
         success: true,
-        message: 'Auto-matched successfully! Group formed.',
+        message: `Auto-matched successfully! Group ready with ${userRequest.members.length} members.`,
         group,
-        request: userRequest
+        request: userRequest,
+        groupReady: true
       });
     }
 
     res.status(200).json({
       success: true,
-      message: `Auto-matched with ${joinedRequests.length} request(s). Still need ${3 - userRequest.members.length} more member(s).`,
+      message: `Auto-matched with ${joinedRequests.length} request(s). ${3 - userRequest.members.length} more member(s) needed.`,
       request: userRequest,
-      joinedRequests
+      joinedRequests,
+      groupReady: false
     });
   } catch (error) {
     res.status(500).json({
@@ -296,28 +355,64 @@ exports.autoMatch = async (req, res) => {
   }
 };
 
-// @desc    Get active group
+// @desc    Get active group or request (for chat - 2+ members)
 // @route   GET /api/matching/active-group
 // @access  Private
 exports.getActiveGroup = async (req, res) => {
   try {
-    const group = await Group.findOne({
+    // First check for active group (3 members)
+    let group = await Group.findOne({
       members: req.user.id,
       status: 'active'
     })
     .populate('members', 'name year semester phone')
     .populate('requestId');
 
-    if (!group) {
-      return res.status(404).json({
-        success: false,
-        message: 'No active group found'
+    if (group) {
+      return res.status(200).json({
+        success: true,
+        group,
+        type: 'group'
       });
     }
 
-    res.status(200).json({
-      success: true,
-      group
+    // If no group, check for active request with 2+ members (for chat)
+    const activeRequest = await OutingRequest.findOne({
+      members: req.user.id,
+      status: { $in: ['pending', 'matched', 'ready'] },
+      expiresAt: { $gt: new Date() }
+    })
+    .populate('members', 'name year semester phone')
+    .populate('userId', 'name year semester phone');
+
+    // Double-check that user is actually in the members array (after population)
+    if (activeRequest && activeRequest.members.length >= 2) {
+      const userIsMember = activeRequest.members.some(m => {
+        const memberId = m._id?.toString() || m.toString();
+        return memberId === req.user.id.toString();
+      });
+
+      if (userIsMember) {
+        // Return as a group-like object for chat compatibility
+        // Use the actual request status, not 'active'
+        return res.status(200).json({
+          success: true,
+          group: {
+            _id: activeRequest._id, // Use request ID as group ID for chat
+            members: activeRequest.members,
+            requestId: activeRequest._id,
+            outingDate: activeRequest.date,
+            outingTime: activeRequest.time,
+            status: activeRequest.status // Use actual request status
+          },
+          type: 'request'
+        });
+      }
+    }
+
+    return res.status(404).json({
+      success: false,
+      message: 'No active group or request found'
     });
   } catch (error) {
     res.status(500).json({
@@ -326,4 +421,5 @@ exports.getActiveGroup = async (req, res) => {
     });
   }
 };
+
 

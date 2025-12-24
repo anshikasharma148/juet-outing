@@ -9,3 +9,4 @@ router.get('/gate-status/:groupId', protect, getGateStatus);
 
 module.exports = router;
 
+

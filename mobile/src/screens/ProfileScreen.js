@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, Button, Text, List, Divider } from 'react-native-paper';
 import { useAuth } from '../context/AuthContext';
 import { userAPI } from '../services/api';
@@ -31,8 +32,9 @@ const ProfileScreen = () => {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.content}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ScrollView style={styles.scrollView}>
+        <View style={styles.content}>
         <Card style={styles.profileCard}>
           <Card.Content>
             <View style={styles.profileHeader}>
@@ -95,14 +97,14 @@ const ProfileScreen = () => {
               title="Edit Profile"
               left={(props) => <List.Icon {...props} icon="account-edit" />}
               right={(props) => <List.Icon {...props} icon="chevron-right" />}
-              onPress={() => {}}
+              onPress={() => navigation.navigate('EditProfile')}
             />
             <Divider />
             <List.Item
               title="Settings"
               left={(props) => <List.Icon {...props} icon="cog" />}
               right={(props) => <List.Icon {...props} icon="chevron-right" />}
-              onPress={() => {}}
+              onPress={() => navigation.navigate('Settings')}
             />
           </Card.Content>
         </Card>
@@ -117,6 +119,7 @@ const ProfileScreen = () => {
         </Button>
       </View>
     </ScrollView>
+    </SafeAreaView>
   );
 };
 
@@ -124,6 +127,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  scrollView: {
+    flex: 1,
   },
   content: {
     padding: 16,
@@ -190,4 +196,5 @@ const styles = StyleSheet.create({
 });
 
 export default ProfileScreen;
+
 

@@ -33,10 +33,10 @@ const groupSchema = new mongoose.Schema({
   }
 });
 
-// Ensure exactly 3 members
+// Ensure at least 2 members (for chat) and at most 3 members (for outing)
 groupSchema.pre('save', function(next) {
-  if (this.members.length !== 3) {
-    return next(new Error('Group must have exactly 3 members'));
+  if (this.members.length < 2 || this.members.length > 3) {
+    return next(new Error('Group must have 2-3 members'));
   }
   next();
 });
@@ -45,4 +45,5 @@ groupSchema.index({ members: 1, status: 1 });
 groupSchema.index({ outingDate: 1, status: 1 });
 
 module.exports = mongoose.model('Group', groupSchema);
+
 

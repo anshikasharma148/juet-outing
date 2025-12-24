@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
-import { Card, Button, Text, Chip, FAB } from 'react-native-paper';
+import { View, StyleSheet, FlatList, RefreshControl, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Card, Button, Text, Chip, FAB, Dialog, Portal } from 'react-native-paper';
 import { outingAPI, matchingAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -9,6 +10,8 @@ const BrowseRequestsScreen = () => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showReadyDialog, setShowReadyDialog] = useState(false);
+  const [readyMessage, setReadyMessage] = useState('');
 
   useEffect(() => {
     loadRequests();
@@ -17,7 +20,21 @@ const BrowseRequestsScreen = () => {
   const loadRequests = async () => {
     try {
       const response = await outingAPI.getRequests({ excludeOwn: 'true' });
-      setRequests(response.data.requests || []);
+      const allRequests = response.data.requests || [];
+      
+      // Filter out expired requests (previous days or expired today)
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      
+      const validRequests = allRequests.filter(request => {
+        const requestDate = new Date(request.date);
+        const requestDay = new Date(requestDate.getFullYear(), requestDate.getMonth(), requestDate.getDate());
+        
+        // Only show today's or future requests
+        return requestDay >= today && new Date(request.expiresAt) > now;
+      });
+      
+      setRequests(validRequests);
     } catch (error) {
       console.error('Error loading requests:', error);
     } finally {
@@ -28,19 +45,60 @@ const BrowseRequestsScreen = () => {
 
   const handleJoin = async (requestId) => {
     try {
-      await matchingAPI.joinRequest(requestId);
+      const response = await matchingAPI.joinRequest(requestId);
+      if (response.data?.groupReady) {
+        const memberCount = response.data.request?.members?.length || 3;
+        setReadyMessage(`🎉 Great! Your group now has ${memberCount} members! You're ready for outing!`);
+        setShowReadyDialog(true);
+      } else {
+        const memberCount = response.data.request?.members?.length || 1;
+        const needed = Math.max(0, 3 - memberCount);
+        Alert.alert(
+          'Joined Successfully',
+          `${needed} more member${needed !== 1 ? 's' : ''} needed to be ready for outing.`
+        );
+      }
       loadRequests();
     } catch (error) {
-      console.error('Error joining request:', error);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to join request');
     }
   };
 
   const handleAutoMatch = async () => {
     try {
-      await matchingAPI.autoMatch();
+      const response = await matchingAPI.autoMatch();
+      if (response.data?.groupReady) {
+        const memberCount = response.data.request?.members?.length || 3;
+        Alert.alert(
+          'Auto-Match Success! 🎉',
+          `Your group now has ${memberCount} members! You're ready for outing!`
+        );
+      } else {
+        const memberCount = response.data.request?.members?.length || 1;
+        const needed = Math.max(0, 3 - memberCount);
+        Alert.alert(
+          'Auto-Match Complete',
+          `Matched with ${response.data.joinedRequests?.length || 0} request(s). ${needed} more member${needed !== 1 ? 's' : ''} needed.`
+        );
+      }
       loadRequests();
     } catch (error) {
-      console.error('Error auto-matching:', error);
+      const errorMessage = error.response?.data?.message || 'Failed to auto-match';
+      if (error.response?.status === 404) {
+        Alert.alert(
+          'No Active Request',
+          'You need to create an outing request first before using auto-match.',
+          [
+            { text: 'OK' },
+            { 
+              text: 'Create Request', 
+              onPress: () => navigation.navigate('CreateRequest') 
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Error', errorMessage);
+      }
     }
   };
 
@@ -56,7 +114,13 @@ const BrowseRequestsScreen = () => {
     const isMember = item.members?.some(
       (m) => m._id?.toString() === user?.id?.toString()
     );
-    const canJoin = item.members?.length < 3 && !isMember;
+    const now = new Date();
+    const requestDate = new Date(item.date);
+    const requestDay = new Date(requestDate.getFullYear(), requestDate.getMonth(), requestDate.getDate());
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const isExpired = requestDay < today || new Date(item.expiresAt) <= now;
+    // Allow joining even if 3+ members (more can join)
+    const canJoin = !isMember && !isExpired && item.status !== 'cancelled';
 
     return (
       <Card style={styles.card}>
@@ -68,8 +132,11 @@ const BrowseRequestsScreen = () => {
                 Year {item.userId?.year}, Sem {item.userId?.semester}
               </Text>
             </View>
-            <Chip mode="flat" style={styles.chip}>
-              {item.members?.length || 1}/3
+            <Chip mode="flat" style={[
+              styles.chip,
+              (item.members?.length || 1) >= 3 && styles.readyChip
+            ]}>
+              {item.members?.length || 1}{item.status === 'ready' ? '+' : ''} {item.status === 'ready' ? 'Ready!' : 'members'}
             </Chip>
           </View>
           <Text variant="bodyMedium" style={styles.dateText}>
@@ -95,7 +162,7 @@ const BrowseRequestsScreen = () => {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <FlatList
         data={requests}
         renderItem={renderRequest}
@@ -118,7 +185,23 @@ const BrowseRequestsScreen = () => {
         style={styles.fab}
         onPress={handleAutoMatch}
       />
-    </View>
+
+      <Portal>
+        <Dialog
+          visible={showReadyDialog}
+          onDismiss={() => setShowReadyDialog(false)}
+        >
+          <Dialog.Icon icon="check-circle" size={48} color="#4caf50" />
+          <Dialog.Title style={styles.dialogTitle}>Ready for Outing! 🎉</Dialog.Title>
+          <Dialog.Content>
+            <Text style={styles.dialogText}>{readyMessage}</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setShowReadyDialog(false)}>Great!</Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+    </SafeAreaView>
   );
 };
 
@@ -146,6 +229,20 @@ const styles = StyleSheet.create({
   },
   chip: {
     height: 28,
+  },
+  readyChip: {
+    backgroundColor: '#4caf50',
+  },
+  dialogTitle: {
+    textAlign: 'center',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginTop: 8,
+  },
+  dialogText: {
+    textAlign: 'center',
+    fontSize: 16,
+    marginTop: 8,
   },
   dateText: {
     marginTop: 8,
@@ -176,4 +273,5 @@ const styles = StyleSheet.create({
 });
 
 export default BrowseRequestsScreen;
+
 

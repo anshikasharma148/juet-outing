@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, ScrollView, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { TextInput, Button, Text, Snackbar } from 'react-native-paper';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { outingAPI } from '../services/api';
@@ -56,8 +57,9 @@ const CreateRequestScreen = () => {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.content}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ScrollView style={styles.scrollView}>
+        <View style={styles.content}>
         <Text variant="titleLarge" style={styles.title}>
           Create Outing Request
         </Text>
@@ -140,6 +142,7 @@ const CreateRequestScreen = () => {
         {success}
       </Snackbar>
     </ScrollView>
+    </SafeAreaView>
   );
 };
 
@@ -147,6 +150,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  scrollView: {
+    flex: 1,
   },
   content: {
     padding: 20,
@@ -179,4 +185,5 @@ const styles = StyleSheet.create({
 });
 
 export default CreateRequestScreen;
+
 

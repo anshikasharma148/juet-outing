@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
-import { Card, Button, Text, FAB, Chip } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, RefreshControl, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Card, Button, Text, FAB, Chip, Dialog, Portal } from 'react-native-paper';
 import { useAuth } from '../context/AuthContext';
 import { matchingAPI, outingAPI } from '../services/api';
 import { useNavigation } from '@react-navigation/native';
+import io from 'socket.io-client';
+import { SOCKET_URL } from '../config/api';
 
 const DashboardScreen = () => {
   const { user } = useAuth();
@@ -12,10 +15,57 @@ const DashboardScreen = () => {
   const [myRequest, setMyRequest] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showReadyDialog, setShowReadyDialog] = useState(false);
+  const [readyMessage, setReadyMessage] = useState('');
+  const socketRef = React.useRef(null);
 
   useEffect(() => {
     loadData();
+    setupSocket();
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
   }, []);
+
+  // Refresh when screen comes into focus (e.g., after leaving a group)
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      loadData();
+    });
+    return unsubscribe;
+  }, [navigation]);
+
+  const setupSocket = () => {
+    socketRef.current = io(SOCKET_URL, {
+      transports: ['websocket'],
+    });
+
+    socketRef.current.on('group-ready', (data) => {
+      setReadyMessage(`🎉 Your group now has ${data.members?.length || 3}+ members! You're ready for outing!`);
+      setShowReadyDialog(true);
+      loadData(); // Refresh data
+    });
+
+    socketRef.current.on('member-joined', (data) => {
+      // Refresh data when someone joins
+      loadData();
+    });
+
+    socketRef.current.on('member-left', (data) => {
+      // Refresh data when someone leaves
+      loadData();
+    });
+
+    socketRef.current.on('request-cancelled', (data) => {
+      Alert.alert(
+        'Outing Update',
+        `${data.cancelledBy} ${data.isCreator ? 'cancelled' : 'left'} the outing.`,
+        [{ text: 'OK', onPress: () => loadData() }]
+      );
+    });
+  };
 
   const loadData = async () => {
     try {
@@ -24,16 +74,48 @@ const DashboardScreen = () => {
         outingAPI.getMyRequests(),
       ]);
 
-      if (groupRes.data?.success) {
-        setActiveGroup(groupRes.data.group);
+      // Only set active group if user is actually a member
+      if (groupRes.data?.success && groupRes.data.group) {
+        const group = groupRes.data.group;
+        const userIsMember = group.members?.some(m => {
+          const memberId = m._id?.toString() || m.toString();
+          return memberId === user?.id?.toString();
+        });
+        
+        if (userIsMember) {
+          setActiveGroup(group);
+        } else {
+          setActiveGroup(null);
+        }
       } else {
         setActiveGroup(null);
       }
 
-      const activeRequest = requestsRes.data.requests?.find(
-        (r) => r.status === 'pending' || r.status === 'matched'
-      );
+      // Filter to only show requests where user is actually a member
+      const activeRequest = requestsRes.data.requests?.find((r) => {
+        const isActive = r.status === 'pending' || r.status === 'matched' || r.status === 'ready';
+        if (!isActive || r.status === 'cancelled') return false;
+        
+        // Check if user is creator
+        const isCreator = r.userId?._id?.toString() === user?.id?.toString() || 
+                         r.userId?.toString() === user?.id?.toString();
+        if (isCreator) {
+          return true;
+        }
+        
+        // Check if user is in members array
+        return r.members?.some(m => {
+          const memberId = m._id?.toString() || m.toString();
+          return memberId === user?.id?.toString();
+        });
+      });
+      
       setMyRequest(activeRequest || null);
+      
+      // Join socket room if there's an active request
+      if (activeRequest && socketRef.current) {
+        socketRef.current.emit('join-group', activeRequest._id);
+      }
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
@@ -55,8 +137,37 @@ const DashboardScreen = () => {
     });
   };
 
+  const handleCancel = () => {
+    Alert.alert(
+      'Cancel Outing',
+      'Are you sure you want to cancel this outing?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              if (myRequest) {
+                await outingAPI.cancelRequest(myRequest._id);
+                // Clear state immediately
+                setMyRequest(null);
+                setActiveGroup(null);
+                Alert.alert('Success', 'Outing request cancelled', [
+                  { text: 'OK', onPress: () => loadData() }
+                ]);
+              }
+            } catch (error) {
+              Alert.alert('Error', error.response?.data?.message || 'Failed to cancel request');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView
         style={styles.scrollView}
         refreshControl={
@@ -81,7 +192,10 @@ const DashboardScreen = () => {
                   {formatDate(activeGroup.outingDate)} at {activeGroup.outingTime}
                 </Text>
                 <Text variant="bodySmall" style={styles.membersText}>
-                  {activeGroup.members?.length || 0} members
+                  {activeGroup.members?.length || 0} member{(activeGroup.members?.length || 0) !== 1 ? 's' : ''}
+                  {activeGroup.status === 'ready' || (activeGroup.members?.length || 0) >= 3 
+                    ? ' - Ready for Outing! 🎉' 
+                    : ` (${Math.max(0, 3 - (activeGroup.members?.length || 0))} more needed)`}
                 </Text>
                 <Button
                   mode="contained"
@@ -105,15 +219,27 @@ const DashboardScreen = () => {
                   {formatDate(myRequest.date)} at {myRequest.time}
                 </Text>
                 <Text variant="bodySmall" style={styles.membersText}>
-                  {myRequest.members?.length || 1}/3 members
+                  {myRequest.members?.length || 1} member{myRequest.members?.length !== 1 ? 's' : ''}
+                  {myRequest.status === 'ready' ? ' - Ready for Outing! 🎉' : ` (${Math.max(0, 3 - (myRequest.members?.length || 1))} more needed)`}
                 </Text>
-                <Button
-                  mode="outlined"
-                  onPress={() => navigation.navigate('BrowseRequests')}
-                  style={styles.button}
-                >
-                  Find Members
-                </Button>
+                <View style={styles.buttonRow}>
+                  <Button
+                    mode="outlined"
+                    onPress={() => navigation.navigate('BrowseRequests')}
+                    style={[styles.button, styles.buttonHalf]}
+                  >
+                    Find Members
+                  </Button>
+                  <Button
+                    mode="outlined"
+                    onPress={handleCancel}
+                    style={[styles.button, styles.buttonHalf]}
+                    buttonColor="#ff5252"
+                    textColor="#fff"
+                  >
+                    Cancel
+                  </Button>
+                </View>
               </Card.Content>
             </Card>
           ) : (
@@ -162,7 +288,23 @@ const DashboardScreen = () => {
         style={styles.fab}
         onPress={() => navigation.navigate('CreateRequest')}
       />
-    </View>
+
+      <Portal>
+        <Dialog
+          visible={showReadyDialog}
+          onDismiss={() => setShowReadyDialog(false)}
+        >
+          <Dialog.Icon icon="check-circle" size={48} color="#4caf50" />
+          <Dialog.Title style={styles.dialogTitle}>Ready for Outing! 🎉</Dialog.Title>
+          <Dialog.Content>
+            <Text style={styles.dialogText}>{readyMessage}</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setShowReadyDialog(false)}>Great!</Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+    </SafeAreaView>
   );
 };
 
@@ -230,7 +372,27 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: '#6200ee',
   },
+  buttonRow: {
+    flexDirection: 'row',
+    marginTop: 16,
+    gap: 8,
+  },
+  buttonHalf: {
+    flex: 1,
+  },
+  dialogTitle: {
+    textAlign: 'center',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginTop: 8,
+  },
+  dialogText: {
+    textAlign: 'center',
+    fontSize: 16,
+    marginTop: 8,
+  },
 });
 
 export default DashboardScreen;
+
 

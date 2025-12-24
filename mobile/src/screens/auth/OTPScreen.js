@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { TextInput, Button, Text, Snackbar } from 'react-native-paper';
 import { authAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -32,7 +33,6 @@ const OTPScreen = ({ route, navigation }) => {
     try {
       const response = await authAPI.verifyOTP({ userId, otp });
       await login(response.data.user, response.data.token);
-      // Navigation will be handled by AuthContext
     } catch (err) {
       setError(err.response?.data?.message || 'OTP verification failed');
     } finally {
@@ -54,56 +54,58 @@ const OTPScreen = ({ route, navigation }) => {
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={styles.container}
-    >
-      <View style={styles.content}>
-        <Text variant="headlineMedium" style={styles.title}>
-          Verify OTP
-        </Text>
-        <Text variant="bodyMedium" style={styles.subtitle}>
-          Enter the 6-digit OTP sent to your phone
-        </Text>
-
-        <TextInput
-          label="OTP"
-          value={otp}
-          onChangeText={setOtp}
-          mode="outlined"
-          keyboardType="number-pad"
-          maxLength={6}
-          style={styles.input}
-        />
-
-        <Button
-          mode="contained"
-          onPress={handleVerify}
-          loading={loading}
-          style={styles.button}
-        >
-          Verify
-        </Button>
-
-        <Button
-          mode="text"
-          onPress={handleResend}
-          disabled={countdown > 0 || resendLoading}
-          loading={resendLoading}
-          style={styles.linkButton}
-        >
-          {countdown > 0 ? `Resend OTP in ${countdown}s` : 'Resend OTP'}
-        </Button>
-      </View>
-
-      <Snackbar
-        visible={!!error}
-        onDismiss={() => setError('')}
-        duration={3000}
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardView}
       >
-        {error}
-      </Snackbar>
-    </KeyboardAvoidingView>
+        <View style={styles.content}>
+          <Text variant="headlineMedium" style={styles.title}>
+            Verify OTP
+          </Text>
+          <Text variant="bodyMedium" style={styles.subtitle}>
+            Enter the 6-digit OTP sent to your phone
+          </Text>
+
+          <TextInput
+            label="OTP"
+            value={otp}
+            onChangeText={setOtp}
+            mode="outlined"
+            keyboardType="number-pad"
+            maxLength={6}
+            style={styles.input}
+          />
+
+          <Button
+            mode="contained"
+            onPress={handleVerify}
+            loading={loading}
+            style={styles.button}
+          >
+            Verify
+          </Button>
+
+          <Button
+            mode="text"
+            onPress={handleResend}
+            disabled={countdown > 0 || resendLoading}
+            loading={resendLoading}
+            style={styles.linkButton}
+          >
+            {countdown > 0 ? `Resend OTP in ${countdown}s` : 'Resend OTP'}
+          </Button>
+        </View>
+
+        <Snackbar
+          visible={!!error}
+          onDismiss={() => setError('')}
+          duration={3000}
+        >
+          {error}
+        </Snackbar>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
@@ -111,6 +113,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  keyboardView: {
+    flex: 1,
     justifyContent: 'center',
     padding: 20,
   },
@@ -140,4 +145,3 @@ const styles = StyleSheet.create({
 });
 
 export default OTPScreen;
-

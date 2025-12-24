@@ -50,3 +50,4 @@ const sendNotification = async (phone, message) => {
 
 module.exports = { sendOTP, sendNotification };
 
+

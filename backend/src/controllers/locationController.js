@@ -22,20 +22,54 @@ exports.checkIn = async (req, res) => {
       });
     }
 
-    // Verify user is member of group
-    const group = await Group.findById(groupId);
+    const OutingRequest = require('../models/OutingRequest');
+    
+    // Check if it's a group or request
+    let group = await Group.findById(groupId);
+    let members = [];
+    let isRequest = false;
+    
     if (!group) {
-      return res.status(404).json({
-        success: false,
-        message: 'Group not found'
-      });
-    }
-
-    if (!group.members.some(m => m.toString() === req.user.id.toString())) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized for this group'
-      });
+      // Check if it's a request ID
+      const request = await OutingRequest.findById(groupId)
+        .populate('members', 'name');
+      
+      if (request && request.members.length >= 3) {
+        // Only allow check-in if request has 3+ members
+        // Verify user is member of request
+        if (!request.members.some(m => {
+          const memberId = m._id?.toString() || m.toString();
+          return memberId === req.user.id.toString();
+        })) {
+          return res.status(403).json({
+            success: false,
+            message: 'Not authorized for this request'
+          });
+        }
+        members = request.members;
+        isRequest = true;
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'You need at least 3 members to check in at the gate'
+        });
+      }
+    } else {
+      // Verify user is member of group and group has 3+ members
+      if (group.members.length < 3) {
+        return res.status(400).json({
+          success: false,
+          message: 'You need at least 3 members to check in at the gate'
+        });
+      }
+      
+      if (!group.members.some(m => m.toString() === req.user.id.toString())) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized for this group'
+        });
+      }
+      members = group.members;
     }
 
     // Calculate distance from gate
@@ -51,16 +85,18 @@ exports.checkIn = async (req, res) => {
       verified
     });
 
-    // Notify other group members
-    const otherMembers = group.members.filter(
-      m => m.toString() !== req.user.id.toString()
-    );
+    // Notify other group/request members
+    const otherMembers = members.filter(m => {
+      const memberId = m._id?.toString() || m.toString();
+      return memberId !== req.user.id.toString();
+    });
 
-    for (const memberId of otherMembers) {
-      const member = await User.findById(memberId);
-      if (member && member.pushToken) {
+    for (const member of otherMembers) {
+      const memberId = member._id?.toString() || member.toString();
+      const memberUser = await User.findById(memberId);
+      if (memberUser && memberUser.pushToken) {
         await sendPushNotification(
-          member.pushToken,
+          memberUser.pushToken,
           'Group Member at Gate',
           `${req.user.name} has arrived at the gate`
         );
@@ -151,27 +187,54 @@ exports.checkOut = async (req, res) => {
   }
 };
 
-// @desc    Get gate status for a group
+// @desc    Get gate status for a group or request
 // @route   GET /api/location/gate-status/:groupId
 // @access  Private
 exports.getGateStatus = async (req, res) => {
   try {
-    const group = await Group.findById(req.params.groupId);
+    const OutingRequest = require('../models/OutingRequest');
+    
+    // Check if it's a group or request
+    let group = await Group.findById(req.params.groupId);
+    let members = [];
+    let isRequest = false;
+    
     if (!group) {
-      return res.status(404).json({
-        success: false,
-        message: 'Group not found'
-      });
+      // Check if it's a request ID
+      const request = await OutingRequest.findById(req.params.groupId)
+        .populate('members', 'name');
+      
+      if (request && request.members.length >= 2) {
+        // Verify user is member of request
+        if (!request.members.some(m => {
+          const memberId = m._id?.toString() || m.toString();
+          return memberId === req.user.id.toString();
+        })) {
+          return res.status(403).json({
+            success: false,
+            message: 'Not authorized for this request'
+          });
+        }
+        members = request.members;
+        isRequest = true;
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'Group or request not found'
+        });
+      }
+    } else {
+      // Verify user is member of group
+      if (!group.members.some(m => m.toString() === req.user.id.toString())) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized for this group'
+        });
+      }
+      members = group.members;
     }
 
-    if (!group.members.some(m => m.toString() === req.user.id.toString())) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized for this group'
-      });
-    }
-
-    // Get latest check-in for each member
+    // Get latest check-in for each member (use groupId or requestId)
     const checkIns = await Location.find({
       groupId: req.params.groupId,
       type: 'checkin'
@@ -211,4 +274,5 @@ exports.getGateStatus = async (req, res) => {
     });
   }
 };
+
 

@@ -38,3 +38,4 @@ locationSchema.index({ userId: 1, groupId: 1, timestamp: -1 });
 
 module.exports = mongoose.model('Location', locationSchema);
 
+

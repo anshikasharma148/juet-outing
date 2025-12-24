@@ -1,25 +1,42 @@
 const Message = require('../models/Message');
 const Group = require('../models/Group');
+const OutingRequest = require('../models/OutingRequest');
 
-// @desc    Get messages for a group
+// @desc    Get messages for a group or request
 // @route   GET /api/messages/:groupId
 // @access  Private
 exports.getMessages = async (req, res) => {
   try {
-    // Verify user is member of group
-    const group = await Group.findById(req.params.groupId);
+    // Check if it's a group or request
+    let group = await Group.findById(req.params.groupId);
+    let isRequest = false;
+    
+    // If not a group, check if it's a request ID
     if (!group) {
-      return res.status(404).json({
-        success: false,
-        message: 'Group not found'
-      });
-    }
-
-    if (!group.members.some(m => m.toString() === req.user.id.toString())) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view messages for this group'
-      });
+      const request = await OutingRequest.findById(req.params.groupId);
+      if (request && request.members.length >= 2) {
+        // Verify user is member of request
+        if (!request.members.some(m => m.toString() === req.user.id.toString())) {
+          return res.status(403).json({
+            success: false,
+            message: 'Not authorized to view messages for this request'
+          });
+        }
+        isRequest = true;
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'Group or request not found'
+        });
+      }
+    } else {
+      // Verify user is member of group
+      if (!group.members.some(m => m.toString() === req.user.id.toString())) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to view messages for this group'
+        });
+      }
     }
 
     const messages = await Message.find({ groupId: req.params.groupId })
@@ -54,20 +71,36 @@ exports.sendMessage = async (req, res) => {
       });
     }
 
-    // Verify user is member of group
-    const group = await Group.findById(groupId);
+    // Check if it's a group or request
+    let group = await Group.findById(groupId);
+    let isRequest = false;
+    
+    // If not a group, check if it's a request ID
     if (!group) {
-      return res.status(404).json({
-        success: false,
-        message: 'Group not found'
-      });
-    }
-
-    if (!group.members.some(m => m.toString() === req.user.id.toString())) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to send messages to this group'
-      });
+      const request = await OutingRequest.findById(groupId);
+      if (request && request.members.length >= 2) {
+        // Verify user is member of request
+        if (!request.members.some(m => m.toString() === req.user.id.toString())) {
+          return res.status(403).json({
+            success: false,
+            message: 'Not authorized to send messages to this request'
+          });
+        }
+        isRequest = true;
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'Group or request not found'
+        });
+      }
+    } else {
+      // Verify user is member of group
+      if (!group.members.some(m => m.toString() === req.user.id.toString())) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to send messages to this group'
+        });
+      }
     }
 
     const message = await Message.create({
@@ -94,4 +127,5 @@ exports.sendMessage = async (req, res) => {
     });
   }
 };
+
 

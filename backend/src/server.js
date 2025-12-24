@@ -41,6 +41,16 @@ io.on('connection', (socket) => {
     console.log(`User ${socket.id} left group ${groupId}`);
   });
 
+  socket.on('typing', (data) => {
+    const { groupId, userId } = data;
+    socket.to(`group-${groupId}`).emit('typing', { userId });
+  });
+
+  socket.on('stop-typing', (data) => {
+    const { groupId } = data;
+    socket.to(`group-${groupId}`).emit('stop-typing');
+  });
+
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
   });

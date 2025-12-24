@@ -89,11 +89,14 @@ exports.updatePushToken = async (req, res) => {
   }
 };
 
-// @desc    Get outing history
+// @desc    Get outing history (including unmatched requests)
 // @route   GET /api/users/history
 // @access  Private
 exports.getHistory = async (req, res) => {
   try {
+    const OutingRequest = require('../models/OutingRequest');
+    
+    // Get completed/cancelled groups
     const groups = await Group.find({
       members: req.user.id,
       status: { $in: ['completed', 'cancelled'] }
@@ -102,10 +105,47 @@ exports.getHistory = async (req, res) => {
     .sort({ createdAt: -1 })
     .limit(50);
 
+    // Get expired/unmatched requests (where user was creator or member)
+    const now = new Date();
+    const expiredRequests = await OutingRequest.find({
+      $or: [
+        { userId: req.user.id },
+        { members: req.user.id }
+      ],
+      $or: [
+        { expiresAt: { $lt: now } },
+        { status: { $in: ['cancelled', 'completed'] } }
+      ]
+    })
+    .populate('userId', 'name year semester')
+    .populate('members', 'name year semester')
+    .sort({ createdAt: -1 })
+    .limit(50);
+
+    // Format expired requests as history items
+    const requestHistory = expiredRequests.map(req => ({
+      _id: req._id,
+      outingDate: req.date,
+      outingTime: req.time,
+      members: req.members.length > 0 ? req.members : [req.userId],
+      status: req.status === 'pending' || req.status === 'matched' ? 'not_matched' : req.status,
+      type: 'request'
+    }));
+
+    // Combine and sort
+    const allHistory = [
+      ...groups.map(g => ({ ...g.toObject(), type: 'group' })),
+      ...requestHistory
+    ].sort((a, b) => {
+      const dateA = a.outingDate || a.createdAt;
+      const dateB = b.outingDate || b.createdAt;
+      return new Date(dateB) - new Date(dateA);
+    }).slice(0, 50);
+
     res.status(200).json({
       success: true,
-      count: groups.length,
-      history: groups
+      count: allHistory.length,
+      history: allHistory
     });
   } catch (error) {
     res.status(500).json({
@@ -170,4 +210,5 @@ exports.getStatistics = async (req, res) => {
     });
   }
 };
+
 
